@@ -1,0 +1,32 @@
+name: Tag stale TickTick tasks
+
+on:
+  schedule:
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (preview, no writes)'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  tag-stale:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Tag stale tasks
+        env:
+          TICKTICK_USERNAME: ${{ secrets.TICKTICK_USERNAME }}
+          TICKTICK_PASSWORD: ${{ secrets.TICKTICK_PASSWORD }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: python tag_stale.py
