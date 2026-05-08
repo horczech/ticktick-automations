@@ -10,7 +10,9 @@
       "Bash(rm -rf /tmp/ttpy-probe)",
       "WebSearch",
       "WebFetch(domain:help.ticktick.com)",
-      "WebFetch(domain:developer.ticktick.com)"
+      "WebFetch(domain:developer.ticktick.com)",
+      "Read(//Users/horczech/Downloads/**)",
+      "Bash(python3 -c \"import sys; print\\(sys.stdin.read\\(\\)\\)\")"
     ]
   }
 }
