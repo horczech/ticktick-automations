@@ -6,33 +6,28 @@ This repo holds personal TickTick automations that run on GitHub Actions. Each a
 
 These were settled in a grilling session. Don't relitigate without good reason.
 
-- **Auth: username/password only.** No OAuth credentials needed at runtime. See "ticktick-py constraints" below for why a stub OAuth object is still constructed.
+- **Auth: TickTick personal API key** (the `tp_…` style key from Settings → Account → API Keys), used as `Authorization: Bearer tp_…` against the Open API. Probed: works against `/open/v1/*`. Does **not** work against the v2 API at `/api/v2/*` (returns 500). Earlier attempts at username/password auth via `ticktick-py` were abandoned because the user is logged into TickTick via Google OAuth and has no native password.
 - **Staleness rule:** `modifiedTime > 7 days ago` AND `dueDate is None` AND `startDate is None` AND task is in a non-shared, non-archived list. Not `createdTime` — `createdTime` is immutable and would tag long-running active work.
-- **Sticky tagging.** The script only ever adds the tag, never removes it. Symmetric (add/remove) tagging was rejected because writes bump `modifiedTime`, which causes ~8-day on/off flapping.
-- **`DRY_RUN` env var** for previewing without writes. No per-run cap — first run is meant to be the bulk run.
-- **Tag handling: case-insensitive check-then-create.** Don't enforce color on a pre-existing `stale` tag — respect whatever the user set.
+- **Sticky tagging.** The script only ever adds the tag, never removes it. Symmetric (add/remove) tagging was rejected because writes bump `modifiedTime`, causing ~8-day on/off flapping.
+- **`DRY_RUN` env var** for previewing without writes. No per-run cap.
 - **Notification on failure: none for now.** GitHub's default failure emails are sufficient.
 - **Schedule: `0 4 * * *`** (04:00 UTC, before the user's workday in Europe/Prague).
 
-## ticktick-py constraints (verified against v2.0.3)
+## TickTick Open API constraints
 
-The library has two real constraints that shape this script. If you change behavior, keep these in mind:
+What the Open API exposes (and what it doesn't) shapes how this script is built. If you change behavior, keep these in mind:
 
-1. **`TickTickClient.__init__` requires an OAuth2 instance positionally** (`api.py:27`). It only reads `.session` and `.access_token_info` from it, so we pass `_StubOAuth` — a tiny class providing both, with a retry-equipped `requests.Session`. We never call the real OAuth2 because its constructor triggers an interactive browser flow that can't complete on a stateless runner.
+- **No `/tag` endpoints.** The user must pre-create the `stale` tag manually in the TickTick UI. The script doesn't try to create it.
+- **No "list all tasks" endpoint.** To enumerate tasks you must list projects (`GET /open/v1/project`) and then fetch each project's tasks (`GET /open/v1/project/{projectId}/data`). One round-trip per project.
+- **The Inbox is not in `/project`.** It's a pseudo-project with id `inbox{userId}` (the user id is exposed via `/open/v1/user/profile`). The script currently does not touch inbox tasks. If the user accumulates stale tasks in the inbox and complains, extend `main()` to also fetch `/project/inbox{user_id}/data` after computing the user id from `/user/profile`.
+- **Task updates use the same dict shape as the v2 task object** (confirmed via the Open API responses): `id`, `projectId`, `title`, `tags`, `status`, `startDate`, `dueDate`, `modifiedTime`, etc. Posting the full task dict to `POST /open/v1/task/{taskId}` works. Tag updates do go through (the unofficial `ticktick-py` library had a stale `# TODO: Make tags work` comment about its own buggy serialization, not about an API limitation).
 
-2. **`client.task.update()` is unusable for our purposes.** It targets the open/v1 API which requires an OAuth Bearer token, and the implementation has a literal `# TODO: Make tags work` comment (`tasks.py:241`). We bypass it and call the v2 batch endpoint directly: `POST {BASE_URL}/batch/task` with `{"add": [], "update": [task], "delete": []}`, authenticated by the cookie set during `_login`. This is the same endpoint TickTick's own web client uses for all task mutations.
+## Verified field names
 
-   `client.tag.create()`, `client.sync()`, and `client.task.delete()` all use v2 endpoints with cookie auth — those work fine without OAuth. Only `task.update()` is the OAuth-only outlier.
-
-If `ticktick-py` ships a version that fixes the open API tag handling, we could revisit and use the supported `update()` path — but only if we also solve OAuth on a stateless runner (see commit history grilling-session for why we ducked that).
-
-## Verified field names (ticktick-py v2.0.3)
-
-From inline docstring examples in the library source:
+From task JSON responses on the Open API:
 
 - Task: `id`, `projectId`, `title`, `status`, `tags`, `startDate`, `dueDate`, `modifiedTime`, `createdTime`, `priority`, `items`, `etag`.
 - Project: `id`, `name`, `userCount` (>1 = shared), `closed` (truthy = archived), `kind`, `groupId`, `permission`.
-- Tag: `name` (lowercased on server), `label` (display case), `color`, `etag`, `parent`.
 
 Timestamps are ISO 8601 strings like `2026-04-15T10:00:00.000+0000`. The script's `parse_ticktick_time` handles both `+0000`-style suffixes and `Z`.
 

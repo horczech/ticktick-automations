@@ -20,32 +20,39 @@ The tag is **sticky**: the script only ever adds it. Removing it is a manual act
 
 ### Setup
 
-1. Add two repository secrets in GitHub → Settings → Secrets and variables → Actions:
-   - `TICKTICK_USERNAME`
-   - `TICKTICK_PASSWORD`
-2. First run as dry run: GitHub → Actions → "Tag stale TickTick tasks" → "Run workflow" → check **Dry run**. Inspect the log for surprises.
-3. Second run for real (uncheck Dry run).
-4. After that, the daily cron at `04:00 UTC` (~05:00–06:00 Europe/Prague) takes over.
+1. **In TickTick (one-time, manual):**
+   - **Generate an API key.** Settings → Account → API Keys → Add New Key. Copy the full key (starts with `tp_`). The TickTick Open API has no `/tag` endpoints, so the script can't auto-create the tag.
+   - **Manually create a tag named `stale`.** Right-click in the sidebar → Add Tag → name `stale`, color `#aaaaaa` (or whatever you prefer).
+
+2. **In GitHub:**
+   - Push this repo to GitHub if you haven't yet.
+   - Add one repository secret: Settings → Secrets and variables → Actions → New repository secret:
+     - `TICKTICK_API_KEY` = the `tp_…` key from step 1.
+
+3. **First run as a dry run:** GitHub → Actions → "Tag stale TickTick tasks" → "Run workflow" → check **Dry run**. Inspect the log for surprises.
+
+4. **Second run for real** (uncheck Dry run).
+
+5. After that, the daily cron at `04:00 UTC` (~05:00–06:00 Europe/Prague) takes over.
 
 ### Local run
 
 ```bash
 pip install -r requirements.txt
-TICKTICK_USERNAME=you@example.com TICKTICK_PASSWORD=... DRY_RUN=true python tag_stale.py
+TICKTICK_API_KEY=tp_... DRY_RUN=true python3 tag_stale.py
 ```
 
 ### Configuration
 
-| Env var              | Effect                                                |
-| -------------------- | ----------------------------------------------------- |
-| `TICKTICK_USERNAME`  | TickTick account email.                               |
-| `TICKTICK_PASSWORD`  | TickTick account password (no 2FA support).           |
-| `DRY_RUN`            | `true`/`1`/`yes` to print what would be tagged and exit without writes. |
+| Env var             | Effect                                                |
+| ------------------- | ----------------------------------------------------- |
+| `TICKTICK_API_KEY`  | Personal API key from TickTick → Settings → Account → API Keys. |
+| `DRY_RUN`           | `true`/`1`/`yes` to print what would be tagged and exit without writes. |
 
 ### Known sharp edges
 
-- **2FA is not supported** by `ticktick-py`'s username/password login flow. If you enable 2FA on TickTick, the script will stop working.
-- **The script bypasses `client.task.update()`** and posts directly to the v2 batch endpoint that TickTick's web client uses. This was necessary because the library's `update()` method requires OAuth Bearer auth and has a `# TODO: Make tags work` flag inside it. See [CLAUDE.md](CLAUDE.md) for the full reasoning. The v2 endpoint is the same one the official web app uses, so it's likely stable, but it's an unofficial integration — TickTick could change it and break the script.
-- **`ticktick-py` is pinned to v2.0.3.** Bumps require manual edit of [requirements.txt](requirements.txt) followed by re-verifying field names against the library's source if anything changes structurally.
+- **Inbox tasks are not iterated.** The Open API's `/project` listing does not include the special "Inbox" pseudo-project, so untouched inbox tasks aren't visible to the script. If your inbox accumulates stale tasks, you'll need to either move them to a real list or extend the script (see [CLAUDE.md](CLAUDE.md) for notes on how).
+- **`stale` tag must exist beforehand.** The Open API exposes no tag CRUD endpoints. If the tag doesn't exist when the script applies it, TickTick may reject the update silently or create a phantom tag with default color.
+- **No "list all tasks" endpoint.** The script makes one HTTP call per project to fetch tasks. If you have many projects, the script's runtime grows linearly. For ~20 projects this is still a few seconds — fine.
 - **GitHub Actions cron is best-effort.** "04:00 UTC" can mean anywhere from 04:00 to 05:30 UTC depending on runner load.
 - **GitHub auto-disables scheduled workflows after 60 days of repo inactivity.** Push any commit at least every 60 days to keep the schedule alive.

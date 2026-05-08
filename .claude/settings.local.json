@@ -7,7 +7,10 @@
       "Bash(python3 -m venv ttpy-probe)",
       "Bash(/tmp/ttpy-probe/bin/pip install *)",
       "Bash(/tmp/ttpy-probe/bin/python -c \"import ticktick, os; print\\(os.path.dirname\\(ticktick.__file__\\)\\)\")",
-      "Bash(rm -rf /tmp/ttpy-probe)"
+      "Bash(rm -rf /tmp/ttpy-probe)",
+      "WebSearch",
+      "WebFetch(domain:help.ticktick.com)",
+      "WebFetch(domain:developer.ticktick.com)"
     ]
   }
 }

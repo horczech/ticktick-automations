@@ -1,1 +1,1 @@
-ticktick-py==2.0.3
+requests==2.32.3

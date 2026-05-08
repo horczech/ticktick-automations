@@ -26,7 +26,6 @@ jobs:
 
       - name: Tag stale tasks
         env:
-          TICKTICK_USERNAME: ${{ secrets.TICKTICK_USERNAME }}
-          TICKTICK_PASSWORD: ${{ secrets.TICKTICK_PASSWORD }}
+          TICKTICK_API_KEY: ${{ secrets.TICKTICK_API_KEY }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: python tag_stale.py

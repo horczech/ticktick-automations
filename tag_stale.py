@@ -8,38 +8,11 @@ import sys
 from datetime import datetime, timedelta, timezone
 
 import requests
-from requests.adapters import HTTPAdapter
-from ticktick.api import TickTickClient
-from urllib3.util.retry import Retry
 
+BASE_URL = "https://api.ticktick.com/open/v1"
 STALE_TAG = "stale"
-STALE_COLOR = "#aaaaaa"
 STALENESS_DAYS = 7
-
-
-class _StubOAuth:
-    """Minimal stand-in for ticktick.oauth2.OAuth2.
-
-    The TickTickClient constructor requires an OAuth2 instance, but only reads
-    `.session` and `.access_token_info` from it. The v2 batch endpoints we use
-    authenticate via the cookie set during username/password login, so the
-    Bearer token is never actually needed. Subclassing OAuth2 would trigger its
-    interactive browser flow on construction, which doesn't work on a stateless
-    GitHub Actions runner.
-    """
-
-    def __init__(self):
-        retry = Retry(
-            total=3,
-            backoff_factor=1,
-            status_forcelist=(405, 500, 502, 504),
-            allowed_methods=frozenset(["GET", "POST", "PUT", "DELETE"]),
-        )
-        adapter = HTTPAdapter(max_retries=retry)
-        self.session = requests.Session()
-        self.session.mount("http://", adapter)
-        self.session.mount("https://", adapter)
-        self.access_token_info = None
+HTTP_TIMEOUT = 30
 
 
 def parse_ticktick_time(value):
@@ -60,7 +33,7 @@ def parse_ticktick_time(value):
     return dt
 
 
-def is_excluded_project(project) -> bool:
+def is_excluded_project(project: dict) -> bool:
     if project.get("closed"):
         return True
     if (project.get("userCount") or 0) > 1:
@@ -68,74 +41,70 @@ def is_excluded_project(project) -> bool:
     return False
 
 
-def update_task_v2(client: TickTickClient, task: dict) -> None:
-    """Update a task via the v2 batch endpoint (cookie auth, supports tags)."""
-    url = client.BASE_URL + "batch/task"
-    payload = {"add": [], "update": [task], "delete": []}
-    response = client.http_post(
-        url, json=payload, cookies=client.cookies, headers=client.HEADERS
-    )
-    errors = response.get("id2error") if isinstance(response, dict) else None
-    if errors:
-        raise RuntimeError(f"TickTick rejected update for task {task.get('id')}: {errors}")
-
-
 def main() -> int:
-    username = os.environ.get("TICKTICK_USERNAME")
-    password = os.environ.get("TICKTICK_PASSWORD")
-    if not username or not password:
-        print("ERROR: TICKTICK_USERNAME and TICKTICK_PASSWORD must be set.", file=sys.stderr)
+    api_key = os.environ.get("TICKTICK_API_KEY")
+    if not api_key:
+        print("ERROR: TICKTICK_API_KEY must be set.", file=sys.stderr)
         return 2
 
     dry_run = os.environ.get("DRY_RUN", "").strip().lower() in ("1", "true", "yes")
 
-    client = TickTickClient(username, password, _StubOAuth())
+    session = requests.Session()
+    session.headers.update({
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    })
 
-    tasks = client.state.get("tasks") or []
-    if not tasks:
-        print("ERROR: no tasks returned — auth likely failed silently.", file=sys.stderr)
+    def get(path: str):
+        r = session.get(f"{BASE_URL}{path}", timeout=HTTP_TIMEOUT)
+        r.raise_for_status()
+        return r.json()
+
+    def post(path: str, payload):
+        r = session.post(f"{BASE_URL}{path}", json=payload, timeout=HTTP_TIMEOUT)
+        r.raise_for_status()
+        return r.json() if r.text else None
+
+    projects = get("/project")
+    if not projects:
+        print("ERROR: /project returned no projects — auth or account issue.", file=sys.stderr)
         return 3
-
-    existing_tag_names = {(t.get("name") or "").lower() for t in (client.state.get("tags") or [])}
-    if STALE_TAG not in existing_tag_names and not dry_run:
-        client.tag.create(STALE_TAG, color=STALE_COLOR)
-
-    skip_project_ids = {
-        p.get("id")
-        for p in (client.state.get("projects") or [])
-        if is_excluded_project(p)
-    }
 
     now = datetime.now(timezone.utc)
     threshold = now - timedelta(days=STALENESS_DAYS)
     prefix = "[DRY RUN] " if dry_run else ""
 
     tagged = 0
-    for task in tasks:
-        if task.get("status") == 1:
-            continue
-        if task.get("projectId") in skip_project_ids:
-            continue
-        if task.get("dueDate") or task.get("startDate"):
+    for project in projects:
+        if is_excluded_project(project):
             continue
 
-        current_tags = task.get("tags") or []
-        if any((t or "").lower() == STALE_TAG for t in current_tags):
-            continue
+        data = get(f"/project/{project['id']}/data")
+        tasks = data.get("tasks") or []
 
-        modified = parse_ticktick_time(task.get("modifiedTime"))
-        if modified is None or modified > threshold:
-            continue
+        for task in tasks:
+            if task.get("status") == 1:
+                continue
+            if task.get("dueDate") or task.get("startDate"):
+                continue
 
-        age_days = (now - modified).days
-        title = task.get("title") or "<untitled>"
-        print(f'{prefix}[stale] +{age_days}d "{title}"')
+            current_tags = task.get("tags") or []
+            if any((t or "").lower() == STALE_TAG for t in current_tags):
+                continue
 
-        if not dry_run:
-            task["tags"] = list(current_tags) + [STALE_TAG]
-            update_task_v2(client, task)
+            modified = parse_ticktick_time(task.get("modifiedTime"))
+            if modified is None or modified > threshold:
+                continue
 
-        tagged += 1
+            age_days = (now - modified).days
+            title = task.get("title") or "<untitled>"
+            print(f'{prefix}[stale] +{age_days}d "{title}"')
+
+            if not dry_run:
+                task["tags"] = list(current_tags) + [STALE_TAG]
+                post(f"/task/{task['id']}", task)
+
+            tagged += 1
 
     if dry_run:
         print(f"[DRY RUN] Would have tagged {tagged} task(s) as stale.")
