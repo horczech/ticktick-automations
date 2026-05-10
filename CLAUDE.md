@@ -16,6 +16,8 @@ These were settled in a grilling session. Don't relitigate without good reason.
 
 ## TickTick Open API constraints
 
+**Terminology note.** TickTick's UI and our local code call them **task lists** (or just "lists"); the Open API calls them **projects**. They are the same thing. URL paths (`/project`, `/project/{id}/data`) and JSON field names (`projectId`) keep the API word; Python variables and log output use "task list" / "list" to match the user's mental model.
+
 What the Open API exposes (and what it doesn't) shapes how this script is built. If you change behavior, keep these in mind:
 
 - **No `/tag` endpoints.** The user must pre-create the `stale` tag manually in the TickTick UI. The script doesn't try to create it.
@@ -47,6 +49,7 @@ Timestamps are ISO 8601 strings like `2026-04-15T10:00:00.000+0000`. The script'
 ## Conventions
 
 - Python scripts live at the repo root, one file per automation: `tag_stale.py`, `next_thing.py`, etc.
+- Shared infrastructure lives in dedicated modules at the repo root. Today: `ticktick_client.py` (thin HTTP client over the TickTick Open API). Future automations should reuse it rather than re-creating their own session/auth setup.
 - Workflows live at `.github/workflows/<script_name>.yml` and mirror the script's name.
 - Pin all PyPI dependencies in `requirements.txt` to exact versions. Bump deliberately.
 - Secrets are GitHub Actions secrets, never committed. Add a row to the README's "Setup" section when introducing a new secret.
