@@ -11,6 +11,7 @@ import requests
 
 BASE_URL = "https://api.ticktick.com/open/v1"
 STALE_TAG = "stale"
+SKIP_TAG = "someday"
 STALENESS_DAYS = 7
 HTTP_TIMEOUT = 30
 
@@ -112,7 +113,10 @@ def main() -> int:
                 continue
 
             current_tags = task.get("tags") or []
-            if any((t or "").lower() == STALE_TAG for t in current_tags):
+            tag_set = {(t or "").lower() for t in current_tags}
+            if STALE_TAG in tag_set:
+                continue
+            if SKIP_TAG in tag_set:
                 continue
 
             # `modifiedTime` is observed on responses but is NOT in the documented
