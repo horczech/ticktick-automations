@@ -16,22 +16,22 @@ STALENESS_DAYS = 7
 HTTP_TIMEOUT = 30
 
 
-def parse_ticktick_time(value):
+def parse_ticktick_time(raw_timestamp):
     """Parse a TickTick timestamp into an aware UTC datetime, or None."""
-    if value is None or value == "":
+    if raw_timestamp is None or raw_timestamp == "":
         return None
-    if isinstance(value, datetime):
-        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-    s = str(value).replace("Z", "+00:00")
-    if len(s) >= 5 and s[-5] in "+-" and s[-3] != ":":
-        s = s[:-2] + ":" + s[-2:]
+    if isinstance(raw_timestamp, datetime):
+        return raw_timestamp if raw_timestamp.tzinfo else raw_timestamp.replace(tzinfo=timezone.utc)
+    iso_text = str(raw_timestamp).replace("Z", "+00:00")
+    if len(iso_text) >= 5 and iso_text[-5] in "+-" and iso_text[-3] != ":":
+        iso_text = iso_text[:-2] + ":" + iso_text[-2:]
     try:
-        dt = datetime.fromisoformat(s)
+        parsed = datetime.fromisoformat(iso_text)
     except ValueError:
         return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
 
 
 def is_excluded_project(project: dict) -> bool:
@@ -68,14 +68,14 @@ def main() -> int:
     })
 
     def get(path: str):
-        r = session.get(f"{BASE_URL}{path}", timeout=HTTP_TIMEOUT)
-        r.raise_for_status()
-        return r.json()
+        response = session.get(f"{BASE_URL}{path}", timeout=HTTP_TIMEOUT)
+        response.raise_for_status()
+        return response.json()
 
     def post(path: str, payload):
-        r = session.post(f"{BASE_URL}{path}", json=payload, timeout=HTTP_TIMEOUT)
-        r.raise_for_status()
-        return r.json() if r.text else None
+        response = session.post(f"{BASE_URL}{path}", json=payload, timeout=HTTP_TIMEOUT)
+        response.raise_for_status()
+        return response.json() if response.text else None
 
     projects = get("/project")
     if not projects:
@@ -83,22 +83,22 @@ def main() -> int:
         return 3
 
     now = datetime.now(timezone.utc)
-    threshold = now - timedelta(days=STALENESS_DAYS)
-    prefix = "[DRY RUN] " if dry_run else ""
+    stale_cutoff = now - timedelta(days=STALENESS_DAYS)
+    log_prefix = "[DRY RUN] " if dry_run else ""
 
-    tagged = 0
-    seen_tasks = 0
-    missing_modified = 0
+    tagged_count = 0
+    total_tasks_seen = 0
+    missing_modified_count = 0
     for project in projects:
         if is_excluded_project(project):
             continue
 
-        data = get(f"/project/{project['id']}/data")
-        tasks = data.get("tasks") or []
+        project_data = get(f"/project/{project['id']}/data")
+        tasks = project_data.get("tasks") or []
         # /project/{id}/data already returns only undone tasks per the docs,
         # but log per-project counts in case the API ever caps the response.
-        print(f'{prefix}[project] "{project.get("name")}" — {len(tasks)} task(s)')
-        seen_tasks += len(tasks)
+        print(f'{log_prefix}[project] "{project.get("name")}" — {len(tasks)} task(s)')
+        total_tasks_seen += len(tasks)
 
         for task in tasks:
             # Defensive: docs say /data returns "Undone tasks", so status should
@@ -113,47 +113,47 @@ def main() -> int:
                 continue
 
             current_tags = task.get("tags") or []
-            tag_set = {(t or "").lower() for t in current_tags}
-            if STALE_TAG in tag_set:
+            current_tags_lower = {(tag_name or "").lower() for tag_name in current_tags}
+            if STALE_TAG in current_tags_lower:
                 continue
-            if SKIP_TAG in tag_set:
+            if SKIP_TAG in current_tags_lower:
                 continue
 
             # `modifiedTime` is observed on responses but is NOT in the documented
             # Task schema (as of these docs). If it ever disappears, every task
             # will fall into this branch — we count it and warn at the end.
-            modified = parse_ticktick_time(task.get("modifiedTime"))
-            if modified is None:
-                missing_modified += 1
+            modified_at = parse_ticktick_time(task.get("modifiedTime"))
+            if modified_at is None:
+                missing_modified_count += 1
                 continue
-            if modified > threshold:
+            if modified_at > stale_cutoff:
                 continue
 
-            age_days = (now - modified).days
+            age_days = (now - modified_at).days
             title = task.get("title") or "<untitled>"
-            print(f'{prefix}[stale] +{age_days}d "{title}"')
+            print(f'{log_prefix}[stale] +{age_days}d "{title}"')
 
             if not dry_run:
                 task["tags"] = list(current_tags) + [STALE_TAG]
                 try:
                     post(f"/task/{task['id']}", task)
-                except requests.HTTPError as e:
+                except requests.HTTPError as error:
                     print(
                         f'WARN: failed to tag task {task.get("id")} '
-                        f'"{title}": {e}',
+                        f'"{title}": {error}',
                         file=sys.stderr,
                     )
                     continue
 
-            tagged += 1
+            tagged_count += 1
 
-    if missing_modified > 0:
-        msg = (
-            f"NOTE: {missing_modified}/{seen_tasks} task(s) had no parseable "
-            f"modifiedTime and were skipped."
+    if missing_modified_count > 0:
+        note_text = (
+            f"NOTE: {missing_modified_count}/{total_tasks_seen} task(s) had no "
+            f"parseable modifiedTime and were skipped."
         )
-        print(msg, file=sys.stderr)
-        if seen_tasks > 0 and missing_modified == seen_tasks:
+        print(note_text, file=sys.stderr)
+        if total_tasks_seen > 0 and missing_modified_count == total_tasks_seen:
             print(
                 "WARN: NO task returned a modifiedTime field. The Open API "
                 "may have stopped returning it; this script depends on it.",
@@ -161,9 +161,9 @@ def main() -> int:
             )
 
     if dry_run:
-        print(f"[DRY RUN] Would have tagged {tagged} task(s) as stale.")
+        print(f"[DRY RUN] Would have tagged {tagged_count} task(s) as stale.")
     else:
-        print(f"Tagged {tagged} task(s) as stale.")
+        print(f"Tagged {tagged_count} task(s) as stale.")
     return 0
 
 
